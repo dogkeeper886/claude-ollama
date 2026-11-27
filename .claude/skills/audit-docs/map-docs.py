@@ -11,9 +11,13 @@ Usage: python3 map-docs.py [dir]   (dir defaults to the current directory)
 """
 import os
 import re
-import subprocess
 import sys
 from datetime import datetime
+
+# Importing gitrepo would otherwise leave a __pycache__ folder in the repo.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gitrepo import git, repo_files, repo_root  # noqa: E402
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DOCS-MAP.template.md")
 MAP = "DOCS-MAP.md"
@@ -27,33 +31,13 @@ REF = re.compile(r"`([^`\s]+)`|\]\(([^)\s#]+)")
 PATHLIKE = re.compile(r"/|\.\w{1,5}$")
 
 
-def run(cmd):
-    # stdout/stderr/universal_newlines rather than capture_output/text: RHEL 8 ships Python 3.6.
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True).stdout
-
-
-start = sys.argv[1] if len(sys.argv) > 1 else "."
-ROOT = run(["git", "-C", start, "rev-parse", "--show-toplevel"]).strip()
-if not ROOT:
-    sys.exit(f"{start} is not inside a git repo")
-
-
-def git(*args):
-    return run(["git", "-C", ROOT, *args])
-
-
-def paths(out):
-    return {p for p in out.split("\0") if p}
-
-
-def read(path):
-    with open(os.path.join(ROOT, path), errors="replace") as f:
+def read(root, path):
+    with open(os.path.join(root, path), errors="replace") as f:
         return f.read()
 
 
-def last_commit(path):
-    t = git("log", "-1", "--format=%ct", "--", path).strip()
+def last_commit_time(root, path):
+    t = git(root, "log", "-1", "--format=%ct", "--", path).strip()
     return int(t) if t else None
 
 
@@ -75,24 +59,24 @@ def checkboxes(text):
             len(re.findall(r"^\s*[-*] \[[xX]\]", text, re.M)))
 
 
-def refs(doc, text):
+def refs(root, doc, text):
     """Each file reference in text, mapped to its repo path, or to None when no such file exists."""
     found = {}
     for m in REF.finditer(text):
         r = (m.group(1) or m.group(2)).rstrip(".,:;")
         if not r or "://" in r or r[0] in "~$-<" or not PATHLIKE.search(r):
             continue
-        for base in (ROOT, os.path.join(ROOT, os.path.dirname(doc))):
+        for base in (root, os.path.join(root, os.path.dirname(doc))):
             p = os.path.normpath(os.path.join(base, r))
             if os.path.exists(p):
-                found[r] = os.path.relpath(p, ROOT)
+                found[r] = os.path.relpath(p, root)
                 break
         else:
             found[r] = None
     return found
 
 
-def nested(key, values, pad):
+def list_lines(key, values, pad):
     if not values:
         return [f"{pad}- {key}: none"]
     return [f"{pad}- {key}:"] + [f"{pad}  - {v}" for v in values]
@@ -180,9 +164,9 @@ def parse_map(text, fields):
     return entries, errors
 
 
-def draft(doc, fields):
+def draft(root, doc, fields):
     """A new entry for doc, in the template's order, with what the script can fill."""
-    text = read(doc)
+    text = read(root, doc)
     open_items, done_items = checkboxes(text)
     lines = [f"- path: {doc}"]
     for key, is_list, placeholder in fields:
@@ -192,76 +176,84 @@ def draft(doc, fields):
         elif key == STALE and open_items + done_items:
             lines.append(f"  - {key}: all its checkboxes are checked")
         elif key == DRIFTS:
-            present = sorted({p for p in refs(doc, text).values() if p and p != MAP})
-            lines += nested(key, present, "  ")
+            present = sorted({p for p in refs(root, doc, text).values() if p and p != MAP})
+            lines += list_lines(key, present, "  ")
         elif is_list:
-            lines += nested(key, [placeholder], "  ")
+            lines += list_lines(key, [placeholder], "  ")
         else:
             lines.append(f"  - {key}: {placeholder}")
     return lines
 
 
-def live(doc, entry, tracked):
+def live_checks(root, doc, entry, tracked):
     """The checks the agent weighs against an existing entry."""
-    full = os.path.join(ROOT, doc)
-    text, mtime = read(doc), os.path.getmtime(full)
+    text, mtime = read(root, doc), os.path.getmtime(os.path.join(root, doc))
     if doc in tracked:
-        edited = bool(git("status", "--porcelain", "--", doc).strip())
+        edited = bool(git(root, "status", "--porcelain", "--", doc).strip())
         state = "tracked, uncommitted edits" if edited else "tracked"
-        since = mtime if edited else last_commit(doc)
+        since = mtime if edited else last_commit_time(root, doc)
     else:
         state, since = "untracked", mtime
     open_items, done_items = checkboxes(text)
     drifts = entry.get(DRIFTS) if isinstance(entry.get(DRIFTS), list) else []
-    named_by = [f for f in git("grep", "-l", "-F", "--untracked", "-e", doc,
+    named_by = [f for f in git(root, "grep", "-l", "-F", "--untracked", "-e", doc,
                                "--", ".", ":!*.jsonl", ":!" + MAP).splitlines() if f != doc]
     lines = [f"  - path: {doc}", f"    - git: {state}", f"    - last change: {day(since)}",
              f"    - open checkboxes: {f'{open_items} of {open_items + done_items}' if open_items + done_items else 'none'}"]
-    lines += nested("drift files changed since this doc",
-                    [p for p in drifts if os.path.exists(os.path.join(ROOT, p)) and (last_commit(p) or 0) > since], "    ")
-    lines += nested("drift files missing", [p for p in drifts if not os.path.exists(os.path.join(ROOT, p))], "    ")
-    lines += nested("named but missing", sorted(r for r, p in refs(doc, text).items() if not p), "    ")
-    lines += nested("named by", named_by, "    ")
+    lines += list_lines("drift files changed since this doc",
+                        [p for p in drifts if os.path.exists(os.path.join(root, p))
+                         and (last_commit_time(root, p) or 0) > since], "    ")
+    lines += list_lines("drift files missing", [p for p in drifts if not os.path.exists(os.path.join(root, p))], "    ")
+    lines += list_lines("named but missing", sorted(r for r, p in refs(root, doc, text).items() if not p), "    ")
+    lines += list_lines("named by", named_by, "    ")
     return lines
 
 
-fields = read_template()
-keys = [f[0] for f in fields]
-tracked = paths(git("ls-files", "-z"))
-skip = {MAP, os.path.relpath(TEMPLATE, ROOT)}
-docs = sorted(paths(git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md", "*.conf")) - skip)
-map_path = os.path.join(ROOT, MAP)
+def main():
+    root = repo_root(sys.argv[1] if len(sys.argv) > 1 else ".")
+    fields = read_template()
+    keys = [f[0] for f in fields]
+    tracked = set(p for p in git(root, "ls-files", "-z").split("\0") if p)
+    skip = {MAP, os.path.relpath(TEMPLATE, root)}
+    docs = [p for p in repo_files(root, "*.md", "*.conf") if p not in skip]
+    map_path = os.path.join(root, MAP)
 
-created = not os.path.exists(map_path)
-text = "" if created else read(MAP)
-entries, errors = parse_map(text, fields)
-if errors:
-    print("\n".join(nested("format errors", errors, "")))
-    sys.exit(1)
-
-new = [d for d in docs if d not in entries]
-if new:
-    with open(map_path, "a") as f:
-        if text and not text.endswith("\n"):
-            f.write("\n")
-        for d in new:
-            f.write("\n".join(draft(d, fields)) + "\n")
-    entries, errors = parse_map(read(MAP), fields)
+    created = not os.path.exists(map_path)
+    text = "" if created else read(root, MAP)
+    entries, errors = parse_map(text, fields)
     if errors:
-        print("\n".join(nested("format errors after appending", errors, "")))
+        print("\n".join(list_lines("format errors", errors, "")))
         sys.exit(1)
 
-unfilled = []
-for path, entry in entries.items():
-    for k in keys:
-        values = entry[k] if isinstance(entry[k], list) else [entry[k]]
-        if any(PLACEHOLDER.match(v) for v in values):
-            unfilled.append(f"{path}: {k}")
+    new = [d for d in docs if d not in entries]
+    if new:
+        with open(map_path, "a") as f:
+            if text and not text.endswith("\n"):
+                f.write("\n")
+            for d in new:
+                f.write("\n".join(draft(root, d, fields)) + "\n")
+        entries, errors = parse_map(read(root, MAP), fields)
+        if errors:
+            print("\n".join(list_lines("format errors after appending", errors, "")))
+            sys.exit(1)
 
-existing = [p for p in entries if p in docs and p not in new]
-report = [f"- map: {'created' if created else 'updated' if new else 'unchanged'}"]
-report += nested("appended", new, "")
-report += nested("gone", [p for p in entries if p not in docs], "")
-report += nested("unfilled", unfilled, "")
-report += ["- existing:"] + sum((live(p, entries[p], tracked) for p in existing), []) if existing else ["- existing: none"]
-print("\n".join(report))
+    unfilled = []
+    for path, entry in entries.items():
+        for k in keys:
+            values = entry[k] if isinstance(entry[k], list) else [entry[k]]
+            if any(PLACEHOLDER.match(v) for v in values):
+                unfilled.append(f"{path}: {k}")
+
+    existing = [p for p in entries if p in docs and p not in new]
+    report = [f"- map: {'created' if created else 'updated' if new else 'unchanged'}"]
+    report += list_lines("appended", new, "")
+    report += list_lines("gone", [p for p in entries if p not in docs], "")
+    report += list_lines("unfilled", unfilled, "")
+    if existing:
+        report += ["- existing:"] + sum((live_checks(root, p, entries[p], tracked) for p in existing), [])
+    else:
+        report += ["- existing: none"]
+    print("\n".join(report))
+
+
+main()

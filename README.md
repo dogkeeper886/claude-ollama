@@ -69,9 +69,10 @@ creates it from `config.example.conf`, and `load.conf` beside it from the repo's
 `load.conf`. Run it again after a `git pull`: it updates each copy from the repo,
 keeps your value for every key you already have, and saves the old copy as `.bak`.
 
-The script parses the file as `key=value` lines, where `#` starts a comment, and
-treats every value as text. It stops at an unknown key or a malformed line and
-names the line number.
+The script reads the file as `key=value` lines with no space around `=`, plus blank
+lines and `#` comment lines, and treats every value as text. It stops at an
+unknown key or a malformed line and names the line number. `make config` rewrites
+an older copy into this shape.
 
 ## Context length
 
@@ -134,15 +135,16 @@ Ollama's `ollama launch claude` sets, plus the window and the config folder:
 | `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1`, each `CLAUDE_CODE_USE_*` set empty | Keep the session on Ollama when Claude Code settings name another provider. |
 | `CLAUDE_CONFIG_DIR=~/.config/claude-ollama/claude`, unless already set | Start the session from Claude Code's out-of-the-box setup. |
 
-Each `feature.<name>=off` in `load.conf` sets one more:
+Each `feature.<name>=off` in `load.conf` sets one more variable; the `FEATURE_OFF`
+table at the top of `claude-ollama.sh` names it.
 
-| Feature | Variable | Effect |
-|---|---|---|
-| `claude-ai-connectors`, `attribution-header`, `total-tokens-reminder`, `error-reporting`, `feedback`, `auto-update` | `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, `DISABLE_ERROR_REPORTING=1`, `DISABLE_FEEDBACK_COMMAND=1` with `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`, `DISABLE_AUTOUPDATER=1` | Turn off what needs Anthropic's servers. |
-| `auto-mode-server` | `CLAUDE_CODE_AUTO_MODE_SERVER=0` | Use Claude Code's own auto-mode classifier: Ollama lacks the server-side check. |
-| `auto-compact` | `DISABLE_AUTO_COMPACT=1` | Free the 33k compaction buffer, and let the server trim instead. |
-| `claude-md` | `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | Skip every `CLAUDE.md`. |
-| `tool-search` | `ENABLE_TOOL_SEARCH=false` | Load every deferred tool in full: 13.9k more tokens. |
+| Feature | `off` |
+|---|---|
+| `claude-ai-connectors`, `attribution-header`, `total-tokens-reminder`, `error-reporting`, `feedback`, `auto-update` | Turns off what needs Anthropic's servers. |
+| `auto-mode-server` | Uses Claude Code's own auto-mode classifier: Ollama lacks the server-side check. |
+| `auto-compact` | Frees the 33k compaction buffer, and lets the server trim instead. |
+| `claude-md` | Skips every `CLAUDE.md`. |
+| `tool-search` | Loads every deferred tool in full: 13.9k more tokens. |
 
 Last tested: Claude Code 2.1.332 against ollama37 2.3.4, a fork of Ollama for the
 Tesla K80.

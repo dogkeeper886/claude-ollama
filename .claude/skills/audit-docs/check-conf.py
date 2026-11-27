@@ -10,9 +10,14 @@ list such as "on | off", each value is one of them.
 Usage: python3 check-conf.py [file ...]   (no files: every .conf file in the repo)
 Prints each error as <file>:<line>: <message>, and exits 1 when there is any.
 """
+import os
 import re
-import subprocess
 import sys
+
+# Importing gitrepo would otherwise leave a __pycache__ folder in the repo.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gitrepo import repo_files, repo_root  # noqa: E402
 
 KEY_LINE = re.compile(r"^([^\s=#]+)=(.*)$")
 HEADER = re.compile(r"^# (\S+): (\S.*)$")
@@ -47,16 +52,16 @@ def check(path):
     with open(path, errors="replace") as f:
         lines = f.read().splitlines()
     for group in groups_of(lines):
-        split = next((i for i, (_, line) in enumerate(group) if not line.startswith("#")), len(group))
-        comments, keys = group[:split], group[split:]
-        pattern = text = options = None
+        key_start = next((i for i, (_, line) in enumerate(group) if not line.startswith("#")), len(group))
+        comments, keys = group[:key_start], group[key_start:]
+        pattern = pattern_text = options = None
         if not comments:
             errors.append((group[0][0], "keys with no comment above them; open the group with '# <key pattern>: <options>'"))
         else:
             n, first = comments[0]
             m = HEADER.match(first)
             if m:
-                text, pattern = m.group(1), key_regex(m.group(1))
+                pattern_text, pattern = m.group(1), key_regex(m.group(1))
                 listed = OPTIONS.match(m.group(2))
                 options = listed.group(1).split(" | ") if listed else None
             else:
@@ -80,7 +85,7 @@ def check(path):
             else:
                 seen[key] = n
             if pattern and not pattern.match(key):
-                errors.append((n, f"{key} doesn't match the group's pattern {text}"))
+                errors.append((n, f"{key} doesn't match the group's pattern {pattern_text}"))
             if not value:
                 errors.append((n, f"{key} has no value"))
             elif re.search(r"\s#", value):
@@ -92,20 +97,24 @@ def check(path):
     return sorted(errors)
 
 
-def repo_confs():
-    out = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.conf"],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).stdout
-    return sorted(p for p in out.split("\0") if p)
-
-
-paths = sys.argv[1:] or repo_confs()
-failed = False
-for path in paths:
-    errors = check(path)
-    for n, message in errors:
-        print(f"{path}:{n}: {message}")
-    if errors:
-        failed = True
+def main():
+    if sys.argv[1:]:
+        paths = sys.argv[1:]
     else:
-        print(f"{path}: ok")
-sys.exit(1 if failed else 0)
+        root = repo_root()
+        paths = [os.path.relpath(os.path.join(root, p)) for p in repo_files(root, "*.conf")]
+        if not paths:
+            print(f"{root}: no .conf files")
+    failed = False
+    for path in paths:
+        errors = check(path)
+        for n, message in errors:
+            print(f"{path}:{n}: {message}")
+        if errors:
+            failed = True
+        else:
+            print(f"{path}: ok")
+    sys.exit(1 if failed else 0)
+
+
+main()

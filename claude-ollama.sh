@@ -15,99 +15,23 @@
 #
 # Each session starts from Claude Code's out-of-the-box setup in its own config
 # folder, CONF_DIR/claude, so the user's ~/.claude plugins, skills and MCP servers
-# stay out; load.conf then turns built-in skills, plugins and features on or off.
+# stay out; load.conf then turns built-in skills, plugins, tools and features on or off.
 set -euo pipefail
 
-URL=""
-MODEL=""
-CONTEXT_LENGTH=""
-
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama"
-LOAD="$CONF_DIR/load.conf"
-# The config file is read as key=value lines, never sourced, so it cannot run code.
 CONFIG="$CONF_DIR/config"
-if [ -f "$CONFIG" ]; then
-  n=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    n=$((n + 1))
-    line="${line%%#*}"
-    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-    if [[ ! "$line" =~ ^[[:space:]]*([a-z_]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then
-      echo "$CONFIG:$n: expected key=value" >&2
-      exit 1
-    fi
-    case "${BASH_REMATCH[1]}" in
-      url) URL="${BASH_REMATCH[2]}" ;;
-      model) MODEL="${BASH_REMATCH[2]}" ;;
-      context_length) CONTEXT_LENGTH="${BASH_REMATCH[2]}" ;;
-      *)
-        echo "$CONFIG:$n: unknown key '${BASH_REMATCH[1]}' (allowed: url, model, context_length)" >&2
-        exit 1
-        ;;
-    esac
-  done <"$CONFIG"
-fi
+LOAD_CONF="$CONF_DIR/load.conf"
+# A config folder already set wins, so a caller can point a session elsewhere.
+SESSION_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$CONF_DIR/claude}"
 
-URL="${CLAUDE_OLLAMA_URL:-$URL}"
-MODEL="${CLAUDE_OLLAMA_MODEL:-$MODEL}"
-CONTEXT_LENGTH="${CLAUDE_OLLAMA_CONTEXT_LENGTH:-$CONTEXT_LENGTH}"
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --context-length)
-      [ $# -ge 2 ] || { echo "--context-length needs a value" >&2; exit 1; }
-      CONTEXT_LENGTH="$2"
-      shift 2
-      ;;
-    --context-length=*) CONTEXT_LENGTH="${1#*=}"; shift ;;
-    *) break ;;
-  esac
-done
-# A first argument without a leading dash names the model; the rest go to claude.
-if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
-  MODEL="$1"
-  shift
-fi
-
-missing=()
-[ -n "$URL" ] || missing+=("  url             or CLAUDE_OLLAMA_URL")
-[ -n "$MODEL" ] || missing+=("  model           or CLAUDE_OLLAMA_MODEL, or the first argument")
-[ -n "$CONTEXT_LENGTH" ] || missing+=("  context_length  or CLAUDE_OLLAMA_CONTEXT_LENGTH, or --context-length")
-if [ ${#missing[@]} -gt 0 ]; then
-  if [ -f "$CONFIG" ]; then
-    echo "claude-ollama: $CONFIG lacks these settings:" >&2
-    printf '%s\n' "${missing[@]}" >&2
-    echo "Add them to that file." >&2
-  else
-    echo "claude-ollama: no config file at $CONFIG, so these settings are missing:" >&2
-    printf '%s\n' "${missing[@]}" >&2
-    echo "Create the file with 'make config' in the claude-ollama repo, or copy config.example.conf there." >&2
-  fi
-  exit 1
-fi
-URL="${URL%/}"
-
-NUM_CTX=""
-if [[ "$CONTEXT_LENGTH" =~ ^([0-9]+)[kK]$ ]]; then
-  NUM_CTX=$((BASH_REMATCH[1] * 1024))
-elif [[ "$CONTEXT_LENGTH" =~ ^[0-9]+$ ]]; then
-  NUM_CTX=$CONTEXT_LENGTH
-fi
-if [ -z "$NUM_CTX" ] || [ "$NUM_CTX" -le 0 ]; then
-  echo "context length '$CONTEXT_LENGTH' is not a token count like 65536 or 64k" >&2
-  exit 1
-fi
-
-command -v claude >/dev/null || {
-  echo "claude not found. Install: curl -fsSL https://claude.ai/install.sh | bash" >&2
-  exit 1
-}
-for tool in curl jq; do
-  command -v "$tool" >/dev/null || { echo "$tool not found" >&2; exit 1; }
-done
+# Each setting's environment variable, and where else the setting can come from.
+SETTING_KEYS=(url model context_length)
+declare -A SETTING_ENV=([url]=CLAUDE_OLLAMA_URL [model]=CLAUDE_OLLAMA_MODEL [context_length]=CLAUDE_OLLAMA_CONTEXT_LENGTH)
+declare -A SETTING_ALSO=([url]="" [model]=", or the first argument" [context_length]=", or --context-length")
+declare -A SETTING=()
 
 # What each feature's "off" sets; "on" leaves Claude Code's own behavior.
-# auto-memory is a setting, not a variable, so it goes into SETTINGS below.
+# auto-memory is a setting, not a variable, so launch() puts it into --settings.
 declare -A FEATURE_OFF=(
   [auto-compact]="DISABLE_AUTO_COMPACT=1"
   [claude-md]="CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"
@@ -121,121 +45,219 @@ declare -A FEATURE_OFF=(
   [feedback]="DISABLE_FEEDBACK_COMMAND=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1"
   [total-tokens-reminder]="CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off"
 )
-if [ ! -f "$LOAD" ]; then
-  echo "claude-ollama: no load.conf at $LOAD." >&2
-  echo "Create it with 'make config' in the claude-ollama repo, or copy load.conf there." >&2
-  exit 1
-fi
-skills_off=()
-plugins_off=()
-tools_off=()
-feature_env=()
-auto_memory=null
-n=0
-while IFS= read -r line || [ -n "$line" ]; do
-  n=$((n + 1))
-  [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-  if [[ ! "$line" =~ ^(skill|plugin|tool|feature)\.([^=[:space:]]+)=(on|off)$ ]]; then
-    echo "$LOAD:$n: expected skill.<name>, plugin.<name>, tool.<name> or feature.<name>, set to on or off" >&2
-    exit 1
-  fi
-  group="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}" value="${BASH_REMATCH[3]}"
-  case "$group" in
-    skill) [ "$value" = on ] || skills_off+=("$name") ;;
-    plugin) [ "$value" = on ] || plugins_off+=("$name") ;;
-    tool) [ "$value" = on ] || tools_off+=("$name") ;;
-    feature)
-      if [ -z "${FEATURE_OFF[$name]+known}" ]; then
-        echo "$LOAD:$n: unknown feature '$name' (known: ${!FEATURE_OFF[*]})" >&2
-        exit 1
-      fi
-      if [ "$name" = auto-memory ]; then
-        auto_memory=$([ "$value" = on ] && echo true || echo false)
-      elif [ "$value" = off ]; then
-        read -r -a assignments <<<"${FEATURE_OFF[$name]}"
-        feature_env+=("${assignments[@]}")
-      fi
-      ;;
-  esac
-done <"$LOAD"
-# Session-only settings: they shape this session and write nothing to disk.
-SETTINGS=$(jq -nc \
-  --argjson skills "$(printf '%s\n' "${skills_off[@]}" | jq -Rn '[inputs | select(length > 0) | {(.): "off"}] | add // {}')" \
-  --argjson plugins "$(printf '%s\n' "${plugins_off[@]}" | jq -Rn '[inputs | select(length > 0) | {(.): false}] | add // {}')" \
-  --argjson memory "$auto_memory" \
-  '{skillOverrides: $skills, enabledPlugins: $plugins, autoMemoryEnabled: $memory} | with_entries(select(.value != null))')
 
-curl -sf "$URL/api/version" >/dev/null || {
-  echo "no Ollama server at $URL" >&2
+die() {
+  printf '%s\n' "$@" >&2
   exit 1
 }
 
-show() {
-  curl -s "$URL/api/show" -d "$(jq -nc --arg m "$1" '{model: $m}')"
+# The config file is read, never sourced, so it cannot run code. Its lines take the
+# shape check-conf.py enforces: blank, a "#" comment, or key=value with no spaces.
+read_config() {
+  [ -f "$CONFIG" ] || return 0
+  local n=0 line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [[ "$line" =~ ^[[:space:]]*$ || "$line" == \#* ]] && continue
+    [[ "$line" =~ ^([a-z_]+)=(.+)$ ]] || die "$CONFIG:$n: expected key=value, with no space around '='"
+    key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+    [ -n "${SETTING_ENV[$key]+known}" ] \
+      || die "$CONFIG:$n: unknown key '$key' (allowed: $(printf '%s, ' "${SETTING_KEYS[@]}" | sed 's/, $//'))"
+    [[ "$value" =~ ^[[:space:]]|[[:space:]]$|[[:space:]]# ]] \
+      && die "$CONFIG:$n: $key's value has spaces around it or a comment after it"
+    SETTING[$key]="$value"
+  done <"$CONFIG"
 }
 
-base=$(show "$MODEL")
-if jq -e '.error' <<<"$base" >/dev/null; then
-  echo "$MODEL is not on $URL ($(jq -r '.error' <<<"$base")). Pull it: ollama pull $MODEL" >&2
-  exit 1
-fi
-# Claude Code sends tool definitions on every request; the server refuses them for
-# a model without the tools capability.
-if ! jq -e '.capabilities // [] | index("tools")' <<<"$base" >/dev/null; then
-  echo "$MODEL does not support tools (capabilities: $(jq -r '.capabilities // [] | join(",")' <<<"$base")); Claude Code needs it" >&2
-  echo "tools-capable models on $URL:" >&2
-  for m in $(curl -s "$URL/api/tags" | jq -r '.models[].name'); do
-    show "$m" | jq -e '.capabilities // [] | index("tools")' >/dev/null 2>&1 && echo "  $m" >&2
+read_environment() {
+  local key var
+  for key in "${SETTING_KEYS[@]}"; do
+    var="${SETTING_ENV[$key]}"
+    [ -z "${!var:-}" ] || SETTING[$key]="${!var}"
   done
-  exit 1
-fi
+}
 
-if [ $((NUM_CTX % 1024)) -eq 0 ]; then
-  RUN_MODEL="$MODEL-$((NUM_CTX / 1024))k"
-else
-  RUN_MODEL="$MODEL-ctx$NUM_CTX"
-fi
-have=$(show "$RUN_MODEL" | jq -r '.parameters // ""' | awk '$1 == "num_ctx" { print $2 }')
-if [ "$have" != "$NUM_CTX" ]; then
-  echo "creating $RUN_MODEL from $MODEL with num_ctx $NUM_CTX" >&2
-  created=$(curl -s "$URL/api/create" -d "$(jq -nc --arg m "$RUN_MODEL" --arg f "$MODEL" --argjson n "$NUM_CTX" \
-    '{model: $m, from: $f, parameters: {num_ctx: $n}, stream: false}')")
-  jq -e '.status == "success"' <<<"$created" >/dev/null || {
-    echo "could not create $RUN_MODEL: $created" >&2
-    exit 1
-  }
-fi
+# A first argument without a leading dash names the model; the rest go to claude.
+read_arguments() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --context-length)
+        [ $# -ge 2 ] || die "--context-length needs a value"
+        SETTING[context_length]="$2"
+        shift 2
+        ;;
+      --context-length=*) SETTING[context_length]="${1#*=}"; shift ;;
+      *) break ;;
+    esac
+  done
+  if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+    SETTING[model]="$1"
+    shift
+  fi
+  CLAUDE_ARGS=("$@")
+}
 
-echo "claude -> $URL ($RUN_MODEL, $NUM_CTX tokens)" >&2
+require_settings() {
+  local key missing=()
+  for key in "${SETTING_KEYS[@]}"; do
+    [ -n "${SETTING[$key]:-}" ] \
+      || missing+=("$(printf '  %-15s or %s%s' "$key" "${SETTING_ENV[$key]}" "${SETTING_ALSO[$key]}")")
+  done
+  [ ${#missing[@]} -eq 0 ] && return 0
+  if [ -f "$CONFIG" ]; then
+    die "claude-ollama: $CONFIG lacks these settings:" "${missing[@]}" "Add them to that file."
+  fi
+  die "claude-ollama: no config file at $CONFIG, so these settings are missing:" "${missing[@]}" \
+    "Create the file with 'make config' in the claude-ollama repo, or copy config.example.conf there."
+}
 
-export ANTHROPIC_BASE_URL="$URL"
-export ANTHROPIC_AUTH_TOKEN=ollama
-# Empty, not unset: a key in the environment wins over the base URL and the
-# session would go to Anthropic instead.
-export ANTHROPIC_API_KEY=""
-# A config folder already set, as gen-load-conf sets one, wins.
-export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$CONF_DIR/claude}"
-# Every model tier and every subagent runs on the copy: Ollama has no Claude model names.
-export ANTHROPIC_MODEL="$RUN_MODEL"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="$RUN_MODEL"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="$RUN_MODEL"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="$RUN_MODEL"
-export CLAUDE_CODE_SUBAGENT_MODEL="$RUN_MODEL"
-# Claude Code assumes a 1M-token window for a model ID it doesn't recognize, and
-# compacts to fit that window; give it the copy's real one.
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$NUM_CTX"
-# From upstream's `ollama launch claude`: keep the session on Ollama even when
-# Claude Code settings name another provider or endpoint.
-export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1
-export CLAUDE_CODE_USE_BEDROCK= CLAUDE_CODE_USE_VERTEX= CLAUDE_CODE_USE_FOUNDRY=
-export CLAUDE_CODE_USE_ANTHROPIC_AWS= CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD=
-export CLAUDE_CODE_USE_MANTLE= CLAUDE_CODE_USE_GATEWAY=
-for assignment in "${feature_env[@]}"; do
-  export "${assignment?}"
-done
+read_context_length() {
+  local length="${SETTING[context_length]}"
+  NUM_CTX=""
+  if [[ "$length" =~ ^([0-9]+)[kK]$ ]]; then
+    NUM_CTX=$((BASH_REMATCH[1] * 1024))
+  elif [[ "$length" =~ ^[0-9]+$ ]]; then
+    NUM_CTX=$length
+  fi
+  [ -n "$NUM_CTX" ] && [ "$NUM_CTX" -gt 0 ] || die "context length '$length' is not a token count like 65536 or 64k"
+}
 
-# --disallowed-tools takes every following word up to the next option, so it goes
-# before --settings, where it cannot swallow the user's own arguments.
-disallowed=()
-[ ${#tools_off[@]} -eq 0 ] || disallowed=(--disallowed-tools "${tools_off[@]}")
-exec claude --model "$RUN_MODEL" "${disallowed[@]}" --settings "$SETTINGS" "$@"
+require_tools() {
+  command -v claude >/dev/null || die "claude not found. Install: curl -fsSL https://claude.ai/install.sh | bash"
+  local tool
+  for tool in curl jq; do
+    command -v "$tool" >/dev/null || die "$tool not found"
+  done
+}
+
+read_load_conf() {
+  [ -f "$LOAD_CONF" ] || die "claude-ollama: no load.conf at $LOAD_CONF." \
+    "Create it with 'make config' in the claude-ollama repo, or copy load.conf there."
+  SKILLS_OFF=() PLUGINS_OFF=() TOOLS_OFF=() FEATURE_ENV=() AUTO_MEMORY=null
+  local n=0 line group name value assignments
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ "$line" =~ ^(skill|plugin|tool|feature)\.([^=[:space:]]+)=(on|off)$ ]] \
+      || die "$LOAD_CONF:$n: expected skill.<name>, plugin.<name>, tool.<name> or feature.<name>, set to on or off"
+    group="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}" value="${BASH_REMATCH[3]}"
+    case "$group" in
+      skill) [ "$value" = on ] || SKILLS_OFF+=("$name") ;;
+      plugin) [ "$value" = on ] || PLUGINS_OFF+=("$name") ;;
+      tool) [ "$value" = on ] || TOOLS_OFF+=("$name") ;;
+      feature)
+        [ -n "${FEATURE_OFF[$name]+known}" ] || die "$LOAD_CONF:$n: unknown feature '$name' (known: ${!FEATURE_OFF[*]})"
+        if [ "$name" = auto-memory ]; then
+          AUTO_MEMORY=$([ "$value" = on ] && echo true || echo false)
+        elif [ "$value" = off ]; then
+          read -r -a assignments <<<"${FEATURE_OFF[$name]}"
+          FEATURE_ENV+=("${assignments[@]}")
+        fi
+        ;;
+    esac
+  done <"$LOAD_CONF"
+}
+
+# The Ollama server's API, and the fields of its replies.
+ollama_up() { curl -sf "$URL/api/version" >/dev/null; }
+ollama_show() { curl -s "$URL/api/show" -d "$(jq -nc --arg m "$1" '{model: $m}')"; }
+ollama_models() { curl -s "$URL/api/tags" | jq -r '.models[].name'; }
+ollama_create() {
+  curl -s "$URL/api/create" -d "$(jq -nc --arg m "$1" --arg f "$2" --argjson n "$3" \
+    '{model: $m, from: $f, parameters: {num_ctx: $n}, stream: false}')"
+}
+reply_error() { jq -r '.error // empty'; }
+reply_capabilities() { jq -r '.capabilities // [] | join(",")'; }
+reply_has_tools() { jq -e '.capabilities // [] | index("tools")' >/dev/null 2>&1; }
+reply_num_ctx() { jq -r '.parameters // ""' | awk '$1 == "num_ctx" { print $2 }'; }
+reply_ok() { jq -e '.status == "success"' >/dev/null; }
+
+check_model() {
+  ollama_up || die "no Ollama server at $URL"
+  local base_info error model listing=()
+  base_info=$(ollama_show "$MODEL")
+  error=$(reply_error <<<"$base_info")
+  [ -z "$error" ] || die "$MODEL is not on $URL ($error). Pull it: ollama pull $MODEL"
+  # Claude Code sends tool definitions on every request; the server refuses them for
+  # a model without the tools capability.
+  reply_has_tools <<<"$base_info" && return 0
+  for model in $(ollama_models); do
+    ollama_show "$model" | reply_has_tools && listing+=("  $model")
+  done
+  die "$MODEL does not support tools (capabilities: $(reply_capabilities <<<"$base_info")); Claude Code needs it" \
+    "tools-capable models on $URL:" "${listing[@]}"
+}
+
+ensure_copy() {
+  if [ $((NUM_CTX % 1024)) -eq 0 ]; then
+    COPY_MODEL="$MODEL-$((NUM_CTX / 1024))k"
+  else
+    COPY_MODEL="$MODEL-ctx$NUM_CTX"
+  fi
+  local copy_num_ctx create_response
+  copy_num_ctx=$(ollama_show "$COPY_MODEL" | reply_num_ctx)
+  [ "$copy_num_ctx" = "$NUM_CTX" ] && return 0
+  echo "creating $COPY_MODEL from $MODEL with num_ctx $NUM_CTX" >&2
+  create_response=$(ollama_create "$COPY_MODEL" "$MODEL" "$NUM_CTX")
+  reply_ok <<<"$create_response" || die "could not create $COPY_MODEL: $create_response"
+}
+
+# A JSON object that maps each name to one JSON value: json_map '"off"' a b gives {"a":"off","b":"off"}.
+json_map() {
+  local value="$1"
+  shift
+  printf '%s\n' "$@" | jq -Rn --argjson v "$value" '[inputs | select(length > 0) | {(.): $v}] | add // {}'
+}
+
+launch() {
+  echo "claude -> $URL ($COPY_MODEL, $NUM_CTX tokens)" >&2
+  export ANTHROPIC_BASE_URL="$URL"
+  export ANTHROPIC_AUTH_TOKEN=ollama
+  # Empty, not unset: a key in the environment wins over the base URL and the
+  # session would go to Anthropic instead.
+  export ANTHROPIC_API_KEY=""
+  export CLAUDE_CONFIG_DIR="$SESSION_CONFIG_DIR"
+  # Every model tier and every subagent runs on the copy: Ollama has no Claude model names.
+  export ANTHROPIC_MODEL="$COPY_MODEL"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="$COPY_MODEL"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="$COPY_MODEL"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$COPY_MODEL"
+  export CLAUDE_CODE_SUBAGENT_MODEL="$COPY_MODEL"
+  # Claude Code assumes a 1M-token window for a model ID it doesn't recognize, and
+  # compacts to fit that window; give it the copy's real one.
+  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$NUM_CTX"
+  # Keep the session on Ollama even when Claude Code settings name another provider or endpoint.
+  export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1
+  export CLAUDE_CODE_USE_BEDROCK= CLAUDE_CODE_USE_VERTEX= CLAUDE_CODE_USE_FOUNDRY=
+  export CLAUDE_CODE_USE_ANTHROPIC_AWS= CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD=
+  export CLAUDE_CODE_USE_MANTLE= CLAUDE_CODE_USE_GATEWAY=
+  local assignment
+  for assignment in "${FEATURE_ENV[@]}"; do
+    export "${assignment?}"
+  done
+  # Session-only settings: they shape this session and write nothing to disk.
+  local settings
+  settings=$(jq -nc \
+    --argjson skills "$(json_map '"off"' "${SKILLS_OFF[@]}")" \
+    --argjson plugins "$(json_map false "${PLUGINS_OFF[@]}")" \
+    --argjson memory "$AUTO_MEMORY" \
+    '{skillOverrides: $skills, enabledPlugins: $plugins, autoMemoryEnabled: $memory} | with_entries(select(.value != null))')
+  # --disallowed-tools takes every following word up to the next option, so it goes
+  # before --settings, where it cannot swallow the user's own arguments.
+  local disallowed=()
+  [ ${#TOOLS_OFF[@]} -eq 0 ] || disallowed=(--disallowed-tools "${TOOLS_OFF[@]}")
+  exec claude --model "$COPY_MODEL" "${disallowed[@]}" --settings "$settings" "${CLAUDE_ARGS[@]}"
+}
+
+read_config
+read_environment
+read_arguments "$@"
+require_settings
+URL="${SETTING[url]%/}"
+MODEL="${SETTING[model]}"
+read_context_length
+require_tools
+read_load_conf
+check_model
+ensure_copy
+launch

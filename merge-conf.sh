@@ -19,16 +19,19 @@ if [ ! -e "$dst" ]; then
   exit 0
 fi
 
+# The installed copy is read leniently, allowing spaces around "=" and a comment
+# after the value as older copies had, and each value is written back in the strict
+# key=value shape that claude-ollama.sh and check-conf.py accept.
 KEY_LINE='^[[:space:]]*([^#[:space:]=]+)[[:space:]]*=(.*)$'
-trim() {
+value_of() {
   local s="${1%%#*}"
   s="${s#"${s%%[![:space:]]*}"}"
   printf '%s' "${s%"${s##*[![:space:]]}"}"
 }
 
-declare -A mine=()
+declare -A installed=()
 while IFS= read -r line || [ -n "$line" ]; do
-  [[ "$line" =~ $KEY_LINE ]] && mine["${BASH_REMATCH[1]}"]="$(trim "${BASH_REMATCH[2]}")"
+  [[ "$line" =~ $KEY_LINE ]] && installed["${BASH_REMATCH[1]}"]="$(value_of "${BASH_REMATCH[2]}")"
 done <"$dst"
 
 declare -A kept=()
@@ -38,8 +41,8 @@ trap 'rm -f "$merged"' EXIT
 while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" =~ $KEY_LINE ]]; then
     key="${BASH_REMATCH[1]}"
-    if [ -n "${mine[$key]+set}" ]; then
-      printf '%s=%s\n' "$key" "${mine[$key]}"
+    if [ -n "${installed[$key]+set}" ]; then
+      printf '%s=%s\n' "$key" "${installed[$key]}"
       kept[$key]=1
       continue
     fi
@@ -49,7 +52,7 @@ while IFS= read -r line || [ -n "$line" ]; do
 done <"$src" >"$merged"
 
 dropped=()
-for key in "${!mine[@]}"; do
+for key in "${!installed[@]}"; do
   [ -n "${kept[$key]+set}" ] || dropped+=("$key")
 done
 
