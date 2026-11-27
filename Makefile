@@ -1,10 +1,15 @@
-# claude-ollama: install the launcher and create its config.
-# Run `make` for the targets. Override BINDIR or CONFIG_DIR on the command line,
-# e.g. `make install BINDIR=/usr/local/bin`.
+# claude-ollama: install the launcher and create or update its config files.
+# Run `make` for the targets. Override BINDIR on the command line, e.g.
+# `make install BINDIR=/usr/local/bin`; move the config files with XDG_CONFIG_HOME.
 
 SHELL := /bin/bash
 BINDIR ?= $(HOME)/bin
-CONFIG_DIR ?= $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/claude-ollama
+# claude-ollama.sh finds its config through XDG_CONFIG_HOME, so CONFIG_DIR follows
+# it too; a CONFIG_DIR of its own would write files the launcher never reads.
+ifeq ($(origin CONFIG_DIR),command line)
+$(error set XDG_CONFIG_HOME, not CONFIG_DIR: claude-ollama.sh reads only XDG_CONFIG_HOME)
+endif
+CONFIG_DIR := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/claude-ollama
 CONFIG := $(CONFIG_DIR)/config
 SCRIPT := $(CURDIR)/claude-ollama.sh
 LINK := $(BINDIR)/claude-ollama

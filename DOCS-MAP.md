@@ -5,6 +5,7 @@
     - .claude/skills/audit-docs/CONF.template
     - .claude/skills/audit-docs/DOCS-MAP.template.md
     - .claude/skills/audit-docs/check-conf.py
+    - .claude/skills/audit-docs/gitrepo.py
     - .claude/skills/audit-docs/map-docs.py
 - path: README.md
   - purpose: tell a newcomer why claude-ollama exists and how to run and configure it
@@ -33,3 +34,32 @@
     - .claude/skills/audit-docs/check-conf.py
     - claude-ollama.sh
     - load.conf
+- path: .claude/skills/review-clean-code/SKILL.md
+  - purpose: Judge clean code:
+  - stale when: the review-clean-code skill is retired; Claude Code loads it until then
+  - drifts when these change: none
+- path: .claude/skills/review-code/SKILL.md
+  - purpose: Review code by five questions:
+  - stale when: the review-code skill is retired; Claude Code loads it until then
+  - drifts when these change:
+    - .claude/skills/review-clean-code/SKILL.md
+    - .claude/skills/review-comments/SKILL.md
+    - .claude/skills/review-dependency/SKILL.md
+    - .claude/skills/review-names/SKILL.md
+    - .claude/skills/review-partitioning/SKILL.md
+- path: .claude/skills/review-comments/SKILL.md
+  - purpose: Judge comments:
+  - stale when: the review-comments skill is retired; Claude Code loads it until then
+  - drifts when these change: none
+- path: .claude/skills/review-dependency/SKILL.md
+  - purpose: Judge dependencies:
+  - stale when: the review-dependency skill is retired; Claude Code loads it until then
+  - drifts when these change: none
+- path: .claude/skills/review-names/SKILL.md
+  - purpose: Judge names:
+  - stale when: the review-names skill is retired; Claude Code loads it until then
+  - drifts when these change: none
+- path: .claude/skills/review-partitioning/SKILL.md
+  - purpose: Judge partitioning:
+  - stale when: the review-partitioning skill is retired; Claude Code loads it until then
+  - drifts when these change: none
