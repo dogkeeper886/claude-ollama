@@ -37,12 +37,9 @@ uninstall: ## Remove the claude-ollama link from BINDIR
 	  echo "$(LINK) is not a link to $(SCRIPT); left it"; \
 	fi
 
-config: ## Create the config in CONFIG_DIR from config.example.conf
-	@if [ -e "$(CONFIG)" ]; then \
-	  echo "$(CONFIG) exists; edit it by hand"; \
-	else \
-	  mkdir -p "$(CONFIG_DIR)" && cp config.example.conf "$(CONFIG)" && echo "created $(CONFIG)"; \
-	fi
+config: ## Create config and load.conf in CONFIG_DIR, or update them and keep your values
+	@./merge-conf.sh config.example.conf "$(CONFIG)"
+	@./merge-conf.sh load.conf "$(CONFIG_DIR)/load.conf"
 
 check: ## Check the script's syntax, with shellcheck when installed
 	@bash -n claude-ollama.sh && echo "bash -n: ok"

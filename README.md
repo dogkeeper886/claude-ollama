@@ -23,7 +23,7 @@ OK
 ```
 
 It needs `claude`, `curl` and `jq`, and an Ollama server that holds the model.
-From the repo, link the script into `~/bin` and create your config:
+From the repo, link the script into `~/bin` and create your `config` and `load.conf`:
 
 ```bash
 make install config
@@ -40,9 +40,10 @@ claude-ollama qwen3.8:27b                      # another model
 claude-ollama --context-length 32k -p "hi"     # another size, one question
 ```
 
-claude-ollama stops with a message in four cases:
+claude-ollama stops with a message in five cases:
 
 - A setting is missing from the command line, the environment and the config file.
+- `load.conf` is missing, or a line in it is malformed or names an unknown feature.
 - The server is unreachable.
 - The model is missing.
 - The model lacks tool support. Claude Code sends tool definitions on every
@@ -64,7 +65,9 @@ and stops.
 
 The config file lives at `~/.config/claude-ollama/config`, or at
 `$XDG_CONFIG_HOME/claude-ollama/config` when you set `XDG_CONFIG_HOME`. `make config`
-creates it from `config.example.conf`, and leaves an existing file alone.
+creates it from `config.example.conf`, and `load.conf` beside it from the repo's
+`load.conf`. Run it again after a `git pull`: it updates each copy from the repo,
+keeps your value for every key you already have, and saves the old copy as `.bak`.
 
 The script parses the file as `key=value` lines, where `#` starts a comment, and
 treats every value as text. It stops at an unknown key or a malformed line and
@@ -87,6 +90,33 @@ weights, so it costs only a few kilobytes of disk.
 - The copy keeps the weights it started from. After you pull a newer base model,
   run `ollama rm gemma4:26b-64k`, and the next launch builds the copy again.
 
+## A session starts out of the box
+
+Claude Code reads your user setup in every session: the plugins, skills, MCP
+servers and settings under `~/.claude`. A local model pays for each in context,
+and your Anthropic sessions would share their history with Ollama ones.
+claude-ollama gives each session its own Claude Code config folder,
+`~/.config/claude-ollama/claude`, so it starts from Claude Code's out-of-the-box
+setup. `load.conf` then turns each built-in item on or off, through a session-only
+`claude --settings` that writes nothing to disk:
+
+| Line in `load.conf` | `off` sets |
+|---|---|
+| `skill.<name>` | `skillOverrides: {"<name>": "off"}` |
+| `plugin.<name>@builtin` | `enabledPlugins: {"<name>@builtin": false}` |
+| `tool.<name>` | `--disallowed-tools <name>`, a flag beside `--settings` |
+| `feature.auto-memory` | `autoMemoryEnabled: false` (`on` sets `true`) |
+| any other `feature.<name>` | its variable, in the next section |
+
+- The working folder's own `.claude/`, `CLAUDE.md` and `.mcp.json` still load.
+- The first launch in a folder asks the trust question again.
+- Preferences such as the permission mode start empty: set them with `/config`.
+- Turning a built-in skill off saves little, since part of its text moves into the
+  tool descriptions. Check a change with `claude-ollama -p /context`.
+- `tool.Workflow=off` drops the Workflow tool, which fans work out to many
+  subagents at once, and saves 1.9k tokens.
+- After a Claude Code update, `/gen-load-conf` regenerates `load.conf`.
+
 ## What it sets for Claude Code
 
 Claude Code also reaches for Anthropic: its settings can name another provider,
@@ -94,7 +124,7 @@ its subagents ask for Claude model names, and some features call Anthropic's
 servers. Each of these requests fails against Ollama. And for a model ID it
 doesn't recognize, Claude Code assumes a window of 1M tokens and compacts to fit
 it. Before it starts `claude`, claude-ollama sets the variables that upstream
-Ollama's `ollama launch claude` sets, plus the window:
+Ollama's `ollama launch claude` sets, plus the window and the config folder:
 
 | Variables | Effect |
 |---|---|
@@ -102,8 +132,17 @@ Ollama's `ollama launch claude` sets, plus the window:
 | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` | Run every model tier and every subagent on the copy. |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, the copy's context length | Size Claude Code's window, and the compaction that fits it, to the copy. |
 | `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1`, each `CLAUDE_CODE_USE_*` set empty | Keep the session on Ollama when Claude Code settings name another provider. |
-| `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, `DISABLE_ERROR_REPORTING=1`, `DISABLE_FEEDBACK_COMMAND=1`, `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`, `DISABLE_AUTOUPDATER=1` | Turn off what needs Anthropic's servers. |
-| `CLAUDE_CODE_AUTO_MODE_SERVER=0`, unless already set | Use Claude Code's own auto-mode classifier: Ollama lacks the server-side check. |
+| `CLAUDE_CONFIG_DIR=~/.config/claude-ollama/claude`, unless already set | Start the session from Claude Code's out-of-the-box setup. |
+
+Each `feature.<name>=off` in `load.conf` sets one more:
+
+| Feature | Variable | Effect |
+|---|---|---|
+| `claude-ai-connectors`, `attribution-header`, `total-tokens-reminder`, `error-reporting`, `feedback`, `auto-update` | `ENABLE_CLAUDEAI_MCP_SERVERS=false`, `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, `DISABLE_ERROR_REPORTING=1`, `DISABLE_FEEDBACK_COMMAND=1` with `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`, `DISABLE_AUTOUPDATER=1` | Turn off what needs Anthropic's servers. |
+| `auto-mode-server` | `CLAUDE_CODE_AUTO_MODE_SERVER=0` | Use Claude Code's own auto-mode classifier: Ollama lacks the server-side check. |
+| `auto-compact` | `DISABLE_AUTO_COMPACT=1` | Free the 33k compaction buffer, and let the server trim instead. |
+| `claude-md` | `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` | Skip every `CLAUDE.md`. |
+| `tool-search` | `ENABLE_TOOL_SEARCH=false` | Load every deferred tool in full: 13.9k more tokens. |
 
 Last tested: Claude Code 2.1.332 against ollama37 2.3.4, a fork of Ollama for the
 Tesla K80.

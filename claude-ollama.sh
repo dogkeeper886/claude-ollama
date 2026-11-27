@@ -12,14 +12,20 @@
 # The Anthropic API that Claude Code speaks has no context-length field, so the
 # length rides on a model copy, <model>-64k: made once through /api/create with
 # num_ctx, reused after. A model's own num_ctx wins over the server default.
+#
+# Each session starts from Claude Code's out-of-the-box setup in its own config
+# folder, CONF_DIR/claude, so the user's ~/.claude plugins, skills and MCP servers
+# stay out; load.conf then turns built-in skills, plugins and features on or off.
 set -euo pipefail
 
 URL=""
 MODEL=""
 CONTEXT_LENGTH=""
 
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama"
+LOAD="$CONF_DIR/load.conf"
 # The config file is read as key=value lines, never sourced, so it cannot run code.
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama/config"
+CONFIG="$CONF_DIR/config"
 if [ -f "$CONFIG" ]; then
   n=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -100,6 +106,65 @@ for tool in curl jq; do
   command -v "$tool" >/dev/null || { echo "$tool not found" >&2; exit 1; }
 done
 
+# What each feature's "off" sets; "on" leaves Claude Code's own behavior.
+# auto-memory is a setting, not a variable, so it goes into SETTINGS below.
+declare -A FEATURE_OFF=(
+  [auto-compact]="DISABLE_AUTO_COMPACT=1"
+  [claude-md]="CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"
+  [tool-search]="ENABLE_TOOL_SEARCH=false"
+  [auto-memory]=""
+  [attribution-header]="CLAUDE_CODE_ATTRIBUTION_HEADER=0"
+  [auto-mode-server]="CLAUDE_CODE_AUTO_MODE_SERVER=0"
+  [auto-update]="DISABLE_AUTOUPDATER=1"
+  [claude-ai-connectors]="ENABLE_CLAUDEAI_MCP_SERVERS=false"
+  [error-reporting]="DISABLE_ERROR_REPORTING=1"
+  [feedback]="DISABLE_FEEDBACK_COMMAND=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1"
+  [total-tokens-reminder]="CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off"
+)
+if [ ! -f "$LOAD" ]; then
+  echo "claude-ollama: no load.conf at $LOAD." >&2
+  echo "Create it with 'make config' in the claude-ollama repo, or copy load.conf there." >&2
+  exit 1
+fi
+skills_off=()
+plugins_off=()
+tools_off=()
+feature_env=()
+auto_memory=null
+n=0
+while IFS= read -r line || [ -n "$line" ]; do
+  n=$((n + 1))
+  [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+  if [[ ! "$line" =~ ^(skill|plugin|tool|feature)\.([^=[:space:]]+)=(on|off)$ ]]; then
+    echo "$LOAD:$n: expected skill.<name>, plugin.<name>, tool.<name> or feature.<name>, set to on or off" >&2
+    exit 1
+  fi
+  group="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}" value="${BASH_REMATCH[3]}"
+  case "$group" in
+    skill) [ "$value" = on ] || skills_off+=("$name") ;;
+    plugin) [ "$value" = on ] || plugins_off+=("$name") ;;
+    tool) [ "$value" = on ] || tools_off+=("$name") ;;
+    feature)
+      if [ -z "${FEATURE_OFF[$name]+known}" ]; then
+        echo "$LOAD:$n: unknown feature '$name' (known: ${!FEATURE_OFF[*]})" >&2
+        exit 1
+      fi
+      if [ "$name" = auto-memory ]; then
+        auto_memory=$([ "$value" = on ] && echo true || echo false)
+      elif [ "$value" = off ]; then
+        read -r -a assignments <<<"${FEATURE_OFF[$name]}"
+        feature_env+=("${assignments[@]}")
+      fi
+      ;;
+  esac
+done <"$LOAD"
+# Session-only settings: they shape this session and write nothing to disk.
+SETTINGS=$(jq -nc \
+  --argjson skills "$(printf '%s\n' "${skills_off[@]}" | jq -Rn '[inputs | select(length > 0) | {(.): "off"}] | add // {}')" \
+  --argjson plugins "$(printf '%s\n' "${plugins_off[@]}" | jq -Rn '[inputs | select(length > 0) | {(.): false}] | add // {}')" \
+  --argjson memory "$auto_memory" \
+  '{skillOverrides: $skills, enabledPlugins: $plugins, autoMemoryEnabled: $memory} | with_entries(select(.value != null))')
+
 curl -sf "$URL/api/version" >/dev/null || {
   echo "no Ollama server at $URL" >&2
   exit 1
@@ -148,7 +213,8 @@ export ANTHROPIC_AUTH_TOKEN=ollama
 # Empty, not unset: a key in the environment wins over the base URL and the
 # session would go to Anthropic instead.
 export ANTHROPIC_API_KEY=""
-export DISABLE_AUTOUPDATER=1
+# A config folder already set, as gen-load-conf sets one, wins.
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$CONF_DIR/claude}"
 # Every model tier and every subagent runs on the copy: Ollama has no Claude model names.
 export ANTHROPIC_MODEL="$RUN_MODEL"
 export ANTHROPIC_DEFAULT_OPUS_MODEL="$RUN_MODEL"
@@ -164,13 +230,12 @@ export CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1
 export CLAUDE_CODE_USE_BEDROCK= CLAUDE_CODE_USE_VERTEX= CLAUDE_CODE_USE_FOUNDRY=
 export CLAUDE_CODE_USE_ANTHROPIC_AWS= CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD=
 export CLAUDE_CODE_USE_MANTLE= CLAUDE_CODE_USE_GATEWAY=
-# Also from upstream: turn off what needs Anthropic's servers.
-export ENABLE_CLAUDEAI_MCP_SERVERS=false
-export CLAUDE_CODE_ATTRIBUTION_HEADER=0
-export CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off
-export DISABLE_ERROR_REPORTING=1
-export DISABLE_FEEDBACK_COMMAND=1
-export CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
-export CLAUDE_CODE_AUTO_MODE_SERVER="${CLAUDE_CODE_AUTO_MODE_SERVER-0}"
+for assignment in "${feature_env[@]}"; do
+  export "${assignment?}"
+done
 
-exec claude --model "$RUN_MODEL" "$@"
+# --disallowed-tools takes every following word up to the next option, so it goes
+# before --settings, where it cannot swallow the user's own arguments.
+disallowed=()
+[ ${#tools_off[@]} -eq 0 ] || disallowed=(--disallowed-tools "${tools_off[@]}")
+exec claude --model "$RUN_MODEL" "${disallowed[@]}" --settings "$SETTINGS" "$@"

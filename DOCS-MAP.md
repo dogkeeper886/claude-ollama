@@ -13,6 +13,8 @@
     - Makefile
     - claude-ollama.sh
     - config.example.conf
+    - load.conf
+    - merge-conf.sh
 - path: config.example.conf
   - purpose: the template make config copies to ~/.config/claude-ollama/config, with the launcher's url, model and context_length
   - stale when: claude-ollama.sh stops reading a config file
@@ -20,7 +22,14 @@
     - Makefile
     - claude-ollama.sh
 - path: load.conf
-  - purpose: choose which skills, plugins, MCP servers and features a claude-ollama session loads
-  - stale when: claude-ollama.sh stops reading it; the launcher doesn't read it yet
+  - purpose: choose which of Claude Code's built-in skills, plugins and tools, and which claude-ollama features, a session loads
+  - stale when: claude-ollama.sh stops reading it
   - drifts when these change:
     - claude-ollama.sh
+- path: .claude/skills/gen-load-conf/SKILL.md
+  - purpose: Regenerate load.conf:
+  - stale when: claude-ollama drops load.conf
+  - drifts when these change:
+    - .claude/skills/audit-docs/check-conf.py
+    - claude-ollama.sh
+    - load.conf
