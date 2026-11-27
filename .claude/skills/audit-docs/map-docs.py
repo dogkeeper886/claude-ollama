@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Keep DOCS-MAP.md, the map of a repo's Markdown files, in step with the repo.
+"""Keep DOCS-MAP.md, the map of a repo's Markdown and config files, in step with the repo.
 
 With no map, it creates one from DOCS-MAP.template.md beside this script. With a
 map, it checks that the map holds only the template's fields in the template's
 format; on any error it prints the errors and exits 1 without writing. It then
-appends an entry for each Markdown file the map lacks, and prints the appended,
+appends an entry for each .md or .conf file the map lacks, and prints the appended,
 gone and unfilled entries, plus live checks for each file the map already held.
 
 Usage: python3 map-docs.py [dir]   (dir defaults to the current directory)
@@ -186,7 +186,8 @@ def draft(doc, fields):
     open_items, done_items = checkboxes(text)
     lines = [f"- path: {doc}"]
     for key, is_list, placeholder in fields:
-        if key == PURPOSE:
+        # A .conf file's first comment gives options, not the file's purpose, so it starts unfilled.
+        if key == PURPOSE and doc.endswith(".md"):
             lines.append(f"  - {key}: {heading(text)}")
         elif key == STALE and open_items + done_items:
             lines.append(f"  - {key}: all its checkboxes are checked")
@@ -228,7 +229,7 @@ fields = read_template()
 keys = [f[0] for f in fields]
 tracked = paths(git("ls-files", "-z"))
 skip = {MAP, os.path.relpath(TEMPLATE, ROOT)}
-docs = sorted(paths(git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md")) - skip)
+docs = sorted(paths(git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md", "*.conf")) - skip)
 map_path = os.path.join(ROOT, MAP)
 
 created = not os.path.exists(map_path)

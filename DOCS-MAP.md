@@ -1,8 +1,10 @@
 - path: .claude/skills/audit-docs/SKILL.md
-  - purpose: Audit a repo's Markdown files:
+  - purpose: Audit a repo's Markdown and config files:
   - stale when: the audit-docs skill is retired; Claude Code loads it until then
   - drifts when these change:
+    - .claude/skills/audit-docs/CONF.template
     - .claude/skills/audit-docs/DOCS-MAP.template.md
+    - .claude/skills/audit-docs/check-conf.py
     - .claude/skills/audit-docs/map-docs.py
 - path: README.md
   - purpose: tell a newcomer why claude-ollama exists and how to run and configure it
@@ -11,3 +13,14 @@
     - Makefile
     - claude-ollama.sh
     - config.example.conf
+- path: config.example.conf
+  - purpose: the template make config copies to ~/.config/claude-ollama/config, with the launcher's url, model and context_length
+  - stale when: claude-ollama.sh stops reading a config file
+  - drifts when these change:
+    - Makefile
+    - claude-ollama.sh
+- path: load.conf
+  - purpose: choose which skills, plugins, MCP servers and features a claude-ollama session loads
+  - stale when: claude-ollama.sh stops reading it; the launcher doesn't read it yet
+  - drifts when these change:
+    - claude-ollama.sh

@@ -1,0 +1,7 @@
+# <key pattern>: <option> | <option>, then what the values name
+#   <the same comment, continued>
+<key>=<value>
+<key>=<value>
+
+# <key pattern>: the range of values, in words
+<key>=<value>
