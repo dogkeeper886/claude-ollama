@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="290" viewBox="0 0 960 290" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44546a"/>
+    </marker>
+  </defs>
+  <rect width="960" height="290" fill="#ffffff"/>
+
+  <!-- top row: the launcher, the copy, the base model -->
+  <rect x="20" y="40" width="180" height="60" rx="8" fill="#f5f7fa" stroke="#44546a" stroke-width="1.5"/>
+  <text x="110" y="66" text-anchor="middle" font-size="14" fill="#1f2937">claude-ollama</text>
+  <text x="110" y="84" text-anchor="middle" font-size="12" fill="#52606d">the launcher</text>
+
+  <rect x="400" y="40" width="220" height="60" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5"/>
+  <text x="510" y="66" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f2937">the copy</text>
+  <text x="510" y="84" text-anchor="middle" font-size="12" fill="#52606d">gemma4:26b-64k · num_ctx 65536</text>
+
+  <rect x="780" y="40" width="160" height="60" rx="8" fill="#f5f7fa" stroke="#44546a" stroke-width="1.5"/>
+  <text x="860" y="66" text-anchor="middle" font-size="14" fill="#1f2937">the base model</text>
+  <text x="860" y="84" text-anchor="middle" font-size="12" fill="#52606d">gemma4:26b weights</text>
+
+  <!-- bottom row: the server, the server's default -->
+  <rect x="400" y="210" width="220" height="60" rx="8" fill="#f5f7fa" stroke="#44546a" stroke-width="1.5"/>
+  <text x="510" y="236" text-anchor="middle" font-size="14" fill="#1f2937">the server</text>
+  <text x="510" y="254" text-anchor="middle" font-size="12" fill="#52606d">Ollama, localhost:11434</text>
+
+  <rect x="780" y="210" width="160" height="60" rx="8" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="860" y="236" text-anchor="middle" font-size="13" fill="#52606d">the server's default</text>
+  <text x="860" y="254" text-anchor="middle" font-size="12" fill="#52606d">often 4096 tokens</text>
+
+  <!-- claude-ollama creates the copy, then reuses it -->
+  <line x1="200" y1="70" x2="398" y2="70" stroke="#44546a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="300" y="60" text-anchor="middle" font-size="12" fill="#1f2937">creates through /api/create</text>
+  <text x="300" y="88" text-anchor="middle" font-size="12" fill="#1f2937">reuses on later launches</text>
+
+  <!-- the copy shares the base model's weights -->
+  <line x1="620" y1="70" x2="778" y2="70" stroke="#44546a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="700" y="60" text-anchor="middle" font-size="12" fill="#1f2937">shares the weights of</text>
+
+  <!-- the server caps the size and loads the model again on a switch -->
+  <line x1="510" y1="210" x2="510" y2="102" stroke="#44546a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="500" y="136" text-anchor="end" font-size="12" fill="#1f2937">caps the size at the</text>
+  <text x="500" y="151" text-anchor="end" font-size="12" fill="#1f2937">model's trained length</text>
+  <text x="500" y="174" text-anchor="end" font-size="12" fill="#1f2937">loads the model again</text>
+  <text x="500" y="189" text-anchor="end" font-size="12" fill="#1f2937">when you switch sizes</text>
+
+  <!-- the copy's own context length wins over the server's default -->
+  <line x1="600" y1="100" x2="798" y2="208" stroke="#44546a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="692" y="172" text-anchor="end" font-size="12" fill="#1f2937">its context length</text>
+  <text x="692" y="187" text-anchor="end" font-size="12" fill="#1f2937">wins over</text>
+</svg>

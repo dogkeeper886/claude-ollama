@@ -1,0 +1,13 @@
+- path: .claude/skills/audit-docs/SKILL.md
+  - purpose: Audit a repo's Markdown files:
+  - stale when: the audit-docs skill is retired; Claude Code loads it until then
+  - drifts when these change:
+    - .claude/skills/audit-docs/DOCS-MAP.template.md
+    - .claude/skills/audit-docs/map-docs.py
+- path: README.md
+  - purpose: tell a newcomer why claude-ollama exists and how to run and configure it
+  - stale when: never; it describes the product
+  - drifts when these change:
+    - Makefile
+    - claude-ollama.sh
+    - config.example.conf
