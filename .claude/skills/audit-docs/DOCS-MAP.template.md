@@ -1,0 +1,5 @@
+- path: <the file's path from the repo root>
+  - purpose: <why the file was created>
+  - stale when: <the event that ends the file's use, or never>
+  - drifts when these change:
+    - <a file whose change can make this file wrong>
