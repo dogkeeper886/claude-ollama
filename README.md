@@ -107,6 +107,7 @@ setup. `load.conf` then turns each built-in item on or off, through a session-on
 | `plugin.<name>@builtin` | `enabledPlugins: {"<name>@builtin": false}` |
 | `tool.<name>` | `--disallowed-tools <name>`, a flag beside `--settings` |
 | `feature.auto-memory` | `autoMemoryEnabled: false` (`on` sets `true`) |
+| `feature.auto-mode` | `permissions: {"disableAutoMode": "disable"}` |
 | any other `feature.<name>` | its variable, in the next section |
 
 - The working folder's own `.claude/`, `CLAUDE.md` and `.mcp.json` still load.
@@ -116,6 +117,11 @@ setup. `load.conf` then turns each built-in item on or off, through a session-on
   tool descriptions. Check a change with `claude-ollama -p /context`.
 - `tool.Workflow=off` drops the Workflow tool, which fans work out to many
   subagents at once, and saves 1.9k tokens.
+- `feature.auto-mode=off` drops auto mode from the permission modes, so Claude
+  Code asks you before each command. Auto mode asks the model instead, with a
+  check prompt past 30k tokens, and waits 60 seconds for the answer. A Tesla K80
+  needs 4–5 minutes to read that prompt, so every check times out and the
+  command never runs.
 - After a Claude Code update, `/gen-load-conf` regenerates `load.conf`.
 
 ## What it sets for Claude Code
