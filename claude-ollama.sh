@@ -31,12 +31,13 @@ declare -A SETTING_ALSO=([url]="" [model]=", or the first argument" [context_len
 declare -A SETTING=()
 
 # What each feature's "off" sets; "on" leaves Claude Code's own behavior.
-# auto-memory is a setting, not a variable, so launch() puts it into --settings.
+# auto-memory and auto-mode are settings, not variables, so launch() puts them into --settings.
 declare -A FEATURE_OFF=(
   [auto-compact]="DISABLE_AUTO_COMPACT=1"
   [claude-md]="CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"
   [tool-search]="ENABLE_TOOL_SEARCH=false"
   [auto-memory]=""
+  [auto-mode]=""
   [attribution-header]="CLAUDE_CODE_ATTRIBUTION_HEADER=0"
   [auto-mode-server]="CLAUDE_CODE_AUTO_MODE_SERVER=0"
   [auto-update]="DISABLE_AUTOUPDATER=1"
@@ -133,7 +134,7 @@ require_tools() {
 read_load_conf() {
   [ -f "$LOAD_CONF" ] || die "claude-ollama: no load.conf at $LOAD_CONF." \
     "Create it with 'make config' in the claude-ollama repo, or copy load.conf there."
-  SKILLS_OFF=() PLUGINS_OFF=() TOOLS_OFF=() FEATURE_ENV=() AUTO_MEMORY=null
+  SKILLS_OFF=() PLUGINS_OFF=() TOOLS_OFF=() FEATURE_ENV=() AUTO_MEMORY=null PERMISSIONS=null
   local n=0 line group name value assignments
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
@@ -149,6 +150,8 @@ read_load_conf() {
         [ -n "${FEATURE_OFF[$name]+known}" ] || die "$LOAD_CONF:$n: unknown feature '$name' (known: ${!FEATURE_OFF[*]})"
         if [ "$name" = auto-memory ]; then
           AUTO_MEMORY=$([ "$value" = on ] && echo true || echo false)
+        elif [ "$name" = auto-mode ]; then
+          [ "$value" = on ] || PERMISSIONS='{"disableAutoMode": "disable"}'
         elif [ "$value" = off ]; then
           read -r -a assignments <<<"${FEATURE_OFF[$name]}"
           FEATURE_ENV+=("${assignments[@]}")
@@ -241,7 +244,9 @@ launch() {
     --argjson skills "$(json_map '"off"' "${SKILLS_OFF[@]}")" \
     --argjson plugins "$(json_map false "${PLUGINS_OFF[@]}")" \
     --argjson memory "$AUTO_MEMORY" \
-    '{skillOverrides: $skills, enabledPlugins: $plugins, autoMemoryEnabled: $memory} | with_entries(select(.value != null))')
+    --argjson permissions "$PERMISSIONS" \
+    '{skillOverrides: $skills, enabledPlugins: $plugins, autoMemoryEnabled: $memory, permissions: $permissions}
+     | with_entries(select(.value != null))')
   # --disallowed-tools takes every following word up to the next option, so it goes
   # before --settings, where it cannot swallow the user's own arguments.
   local disallowed=()
